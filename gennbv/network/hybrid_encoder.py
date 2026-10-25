@@ -65,7 +65,7 @@ class Hybrid_Encoder(BaseFeaturesExtractor):
                 nn.Conv2d(32, 32, kernel_size=3, stride=2),
                 nn.ReLU(inplace=True),
                 nn.Flatten(),
-                nn.Linear(32 * 6 * 6, 256),
+                nn.Linear(32 * 7 * 7, 256),
                 nn.ReLU(inplace=True),
             )
 
