@@ -242,6 +242,10 @@ def main():
             tb_log_name=exp_name,  # Should place the algorithm name here!
             log_interval=1,
         )
+        final_path = os.path.join(log_dir, "models", "rl_model_final")
+        os.makedirs(os.path.dirname(final_path), exist_ok=True)
+        model.save(final_path)
+        print(f"Saved final trained model to {final_path}.zip", flush=True)
     finally:
         env.close()
 

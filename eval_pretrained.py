@@ -27,6 +27,8 @@ def parse_args():
     p.add_argument('--seed', type=int, default=100)
     p.add_argument('--output', default='_artifacts/pretrained_smoke')
     p.add_argument('--check-only', action='store_true', help='Check policy weights without creating simulator')
+    p.add_argument('--use-image', action='store_true',
+                   help='Load a checkpoint trained with the optional two-frame image branch')
     p.add_argument('--stochastic', action='store_true')
     p.add_argument('--inspect-observation', action='store_true',
                    help='Print statistics of the actual grayscale frames in the flattened observation')
@@ -80,7 +82,8 @@ def main():
             encoder_param={'hidden_shapes': [256, 256], 'visual_dim': 256},
             net_param={'transformer_params': [[1, 256], [1, 256]],
                        'append_hidden_shapes': [256]},
-            state_input_shape=(600,), visual_input_shape=(100, 400, 400),
+            state_input_shape=(600,), visual_input_shape=(2, 64, 64),
+            use_image=args.use_image,
         ),
     )
     # Official SB3 checkpoint: load the policy only, not optimizer or pickled metadata.
@@ -105,7 +108,8 @@ def main():
     del state
     policy.to(device).set_training_mode(False)
     print('Strict checkpoint loading passed.', flush=True)
-    print('Encoder in this source uses pose history and occupancy, not RGB.', flush=True)
+    print('Encoder inputs: pose history + occupancy'
+          + (' + two grayscale images' if args.use_image else ' (images ignored)'), flush=True)
     if args.check_only:
         return
 
@@ -159,7 +163,8 @@ def main():
     meta.update(weights=str(weights), checkpoint_sha256=hashlib.sha256(weights.read_bytes()).hexdigest(),
                 metric='diagnostic voxel coverage; not paper benchmark AUC',
                 reset_observation_counted=False, scene_ids=list(range(1, args.num_envs + 1)),
-                source_encoder='pose history + occupancy; RGB unused',
+                source_encoder=('pose history + occupancy + two grayscale images'
+                                if args.use_image else 'pose history + occupancy; images unused'),
                 pycuda_compile_arch='sm_86', torch=torch.__version__)
     meta['source_commit'] = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
     (out / 'metadata.json').write_text(json.dumps(meta, indent=2))
