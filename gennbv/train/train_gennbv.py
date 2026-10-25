@@ -18,6 +18,12 @@ from gennbv.network.hybrid_encoder import Hybrid_Encoder
 def main():
     additional_args = [
         {
+            "name": "--use_image",
+            "type": int,
+            "default": 0,
+            "help": "1 enables the two-frame grayscale image encoder"
+        },
+        {
             "name": "--max_episode_length",
             "type": int,
             "default": 100,
@@ -162,8 +168,8 @@ def main():
                         "append_hidden_shapes": [256, 256]
                     },
                     state_input_shape=(args.buffer_size * 6,),  # buffer_size * pose_size
-                    visual_input_shape=(
-                    args.buffer_size, env_cfg.visual_input.camera_height, env_cfg.visual_input.camera_width)
+                    visual_input_shape=(env_train.k, env_train.rgb_h, env_train.rgb_w),
+                    use_image=bool(args.use_image),
                 )
             ),
             env=env,

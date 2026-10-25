@@ -16,6 +16,7 @@ class Hybrid_Encoder(BaseFeaturesExtractor):
         net_param=None,
         visual_input_shape=None,
         state_input_shape=None,
+        use_image=False,
     ):
         assert encoder_param is not None, "Need parameters !"
         assert net_param is not None, "Need parameters !"
@@ -24,6 +25,7 @@ class Hybrid_Encoder(BaseFeaturesExtractor):
         self.image_channel = visual_input_shape[0]  # buffer_size
         self.image_shape = visual_input_shape[1:]
         self.state_input_shape = state_input_shape
+        self.use_image = use_image
         feature_dim = net_param["append_hidden_shapes"][-1]
         net_param["append_hidden_shapes"].pop()
         super(Hybrid_Encoder, self).__init__(observation_space, feature_dim)
@@ -49,9 +51,23 @@ class Hybrid_Encoder(BaseFeaturesExtractor):
         )
 
         self.output_layer = nn.Sequential(
-            nn.Linear(in_features=512, out_features=256, bias=True),
+            nn.Linear(in_features=768 if use_image else 512, out_features=256, bias=True),
             nn.ReLU(inplace=True),
         )
+        if use_image:
+            if tuple(visual_input_shape) != (2, 64, 64):
+                raise ValueError("The image branch expects two 64x64 grayscale frames")
+            self.naive_encoder_image = nn.Sequential(
+                nn.Conv2d(2, 16, kernel_size=3, stride=2),
+                nn.ReLU(inplace=True),
+                nn.Conv2d(16, 32, kernel_size=3, stride=2),
+                nn.ReLU(inplace=True),
+                nn.Conv2d(32, 32, kernel_size=3, stride=2),
+                nn.ReLU(inplace=True),
+                nn.Flatten(),
+                nn.Linear(32 * 6 * 6, 256),
+                nn.ReLU(inplace=True),
+            )
 
     def positional_encoding(self, positions, freqs=2):
         """
@@ -86,6 +102,17 @@ class Hybrid_Encoder(BaseFeaturesExtractor):
         feature_grid = self.naive_encoder_grid(grid_input).reshape(num_env, -1) # [num_env, hidden_layer_size]
         feature_grid = self.output_layer_grid(feature_grid)  # [num_env, 256]
 
-        feature_hybrid = self.output_layer(torch.cat((feature_action, feature_grid), dim=-1))  # [num_env, 256*3] -> [num_env, 256]
+        features = [feature_action, feature_grid]
+        if self.use_image:
+            image_start = self.state_input_shape[0] + 8000
+            image_size = self.image_channel * self.image_shape[0] * self.image_shape[1]
+            if observations.shape[1] != image_start + image_size:
+                raise ValueError("Flattened observation size does not match pose, grid and image inputs")
+            image_input = observations[:, image_start:].reshape(
+                num_env, self.image_channel, *self.image_shape
+            ).float() / 255.0
+            features.append(self.naive_encoder_image(image_input))
+
+        feature_hybrid = self.output_layer(torch.cat(features, dim=-1))
 
         return feature_hybrid
