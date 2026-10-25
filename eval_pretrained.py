@@ -28,6 +28,8 @@ def parse_args():
     p.add_argument('--output', default='_artifacts/pretrained_smoke')
     p.add_argument('--check-only', action='store_true', help='Check policy weights without creating simulator')
     p.add_argument('--stochastic', action='store_true')
+    p.add_argument('--inspect-observation', action='store_true',
+                   help='Print statistics of the actual grayscale frames in the flattened observation')
     args = p.parse_args()
     if not 2 <= args.views <= 100:
         p.error('--views must be between 2 and 100')
@@ -184,6 +186,20 @@ def main():
                 with torch.no_grad():
                     actions, _ = policy.predict(obs, deterministic=not args.stochastic)
                 obs, rewards, dones, infos, accuracies = wrapped.step(actions)
+                if args.inspect_observation:
+                    image_flat = obs[:, 600 + 8000:]
+                    if image_flat.shape[1] != 2 * 64 * 64:
+                        raise RuntimeError(f'Unexpected image observation shape: {tuple(image_flat.shape)}')
+                    image_pair = image_flat.reshape(args.num_envs, 2, 64, 64)
+                    if not torch.isfinite(image_pair).all():
+                        raise RuntimeError('Image observation contains non-finite values')
+                    newest = image_pair[:, -1]
+                    print(f'view={view} grayscale shape={tuple(image_pair.shape)} '
+                          f'range=[{newest.min().item():.1f}, {newest.max().item():.1f}] '
+                          f'mean={newest.mean().item():.2f} '
+                          f'nonzero={(newest != 0).float().mean().item():.3f} '
+                          f'frame_diff={(image_pair[:, 0] != image_pair[:, 1]).float().mean().item():.3f}',
+                          flush=True)
                 done_np = dones.detach().cpu().numpy().astype(bool)
                 collision = raw.collision_buf.detach().cpu().numpy().astype(bool)
                 for i in range(args.num_envs):
