@@ -30,6 +30,8 @@ def parse_args():
     p.add_argument('--use-image', action='store_true',
                    help='Load a checkpoint trained with the optional two-frame image branch')
     p.add_argument('--stochastic', action='store_true')
+    p.add_argument('--detect-lines', action='store_true',
+                   help='Save 2D LSD line overlays; does not change policy observations')
     p.add_argument('--inspect-observation', action='store_true',
                    help='Print statistics of the actual grayscale frames in the flattened observation')
     args = p.parse_args()
@@ -219,6 +221,10 @@ def main():
                     scene_dir = out / f'house_{i+1:02d}'
                     scene_dir.mkdir(exist_ok=True)
                     Image.fromarray(raw.record_rgb[i].astype(np.uint8)).save(scene_dir / f'rgb_{view:03d}.png')
+                    if args.detect_lines:
+                        from line_detection import save_detection
+                        save_detection(raw.record_rgb[i].astype(np.uint8),
+                                       scene_dir / f'lines_{view:03d}')
                     np.save(scene_dir / f'depth_processed_{view:03d}.npy', raw.record_depth[i])
                     finished[i] = done_np[i]
                     print(f'house={i+1} view={view} coverage={row["coverage"]:.4f} done={done_np[i]}', flush=True)
