@@ -18,6 +18,7 @@ def line_fields(mode):
 
 def configure_line_camera(env, detector):
     env.capture_line_rgb = detector is not None
+    env.capture_line_seg = detector is not None
     env.capture_line_depth = detector is not None and detector.geometry_mode == 'evidence'
     if not env.capture_line_depth:
         return
@@ -47,7 +48,27 @@ class _NoLines(Exception):
     """Official HAWPv2 can reach an empty proposal set before reshape/min."""
 
 
-def pack_lines(lines, scores, width, height, max_lines=64, threshold=0.5):
+def foreground_line_mask(lines, foreground, samples=16, radius=4, minimum_fraction=0.25):
+    """Keep lines with enough samples touching the target or its silhouette."""
+    foreground = np.asarray(foreground, dtype=bool)
+    if foreground.ndim != 2:
+        raise ValueError('Foreground mask must be [H,W]')
+    h, w = foreground.shape
+    keep = np.zeros(len(lines), dtype=bool)
+    for i, line in enumerate(lines):
+        endpoints = line.reshape(2, 2)
+        points = endpoints[0] + np.linspace(0.05, 0.95, samples)[:, None] * (endpoints[1] - endpoints[0])
+        hits = 0
+        for x, y in points:
+            ix, iy = int(round(x)), int(round(y))
+            x0, x1 = max(0, ix - radius), min(w, ix + radius + 1)
+            y0, y1 = max(0, iy - radius), min(h, iy + radius + 1)
+            hits += x0 < x1 and y0 < y1 and foreground[y0:y1, x0:x1].any()
+        keep[i] = hits / samples >= minimum_fraction
+    return keep
+
+
+def pack_lines(lines, scores, width, height, max_lines=64, threshold=0.5, foreground=None):
     if max_lines < 1 or width < 1 or height < 1 or not 0 <= threshold <= 1:
         raise ValueError('Invalid line packing settings')
     lines = np.asarray(lines, dtype=np.float32).reshape(-1, 4)
@@ -56,6 +77,11 @@ def pack_lines(lines, scores, width, height, max_lines=64, threshold=0.5):
         raise ValueError('Line and score counts differ')
     keep = np.isfinite(lines).all(1) & np.isfinite(scores) & (scores >= threshold)
     lines, scores = lines[keep], scores[keep]
+    if foreground is not None:
+        if np.asarray(foreground).shape != (height, width):
+            raise ValueError('Foreground and RGB shapes differ')
+        keep = foreground_line_mask(lines, foreground)
+        lines, scores = lines[keep], scores[keep]
     lines = np.clip(lines / np.array([width, height, width, height]), 0, 1)
     # Canonical endpoint ordering makes undirected segments identical after reversal.
     reverse = (lines[:, 0] > lines[:, 2]) | ((lines[:, 0] == lines[:, 2]) & (lines[:, 1] > lines[:, 3]))
@@ -116,6 +142,7 @@ class HAWPState:
             'weights_sha256': hashlib.sha256(Path(weights).read_bytes()).hexdigest(),
             'config_sha256': hashlib.sha256(Path(config).read_bytes()).hexdigest(),
             'input': 'current full-resolution RGB; official resize/normalization',
+            'foreground_filter': 'target_segmentation_255_touch_4px_4of16_v1',
         }
         if geometry_mode != 'raw':
             self.manifest.update(schema='xyxy_score_mask_support_weak_unknown_v1',
@@ -135,15 +162,18 @@ class HAWPState:
         self.geometry_seconds = 0.0
         self.evidence_sum = np.zeros(3, dtype=np.float64)
 
-    def __call__(self, rgb, depth=None, intrinsics=None):
+    def __call__(self, rgb, depth=None, intrinsics=None, foreground=None):
         import torch
         if rgb.ndim != 4 or rgb.shape[-1] != 3 or rgb.dtype != torch.uint8:
             raise ValueError('HAWP expects uint8 [N,H,W,3] RGB captured this step')
+        if foreground is None or tuple(foreground.shape) != tuple(rgb.shape[:3]):
+            raise ValueError('HAWP state requires aligned current-frame target mask')
         start = time.perf_counter()
         images = rgb.detach().cpu().numpy()
+        masks = foreground.detach().cpu().numpy()
         tokens = []
         with torch.no_grad(), torch.cuda.device(self.device):
-            for image in images:
+            for image, mask in zip(images, masks):
                 height, width = image.shape[:2]
                 tensor = self.transform(image).unsqueeze(0).to(self.device)
                 try:
@@ -153,7 +183,7 @@ class HAWPState:
                     continue
                 tokens.append(pack_lines(output['lines_pred'].cpu().numpy(),
                                          output['lines_score'].cpu().numpy(), width, height,
-                                         self.max_lines, self.threshold))
+                                         self.max_lines, self.threshold, foreground=mask))
         array = np.stack(tokens)
         self.seconds += time.perf_counter() - start  # includes transfers and official CPU preprocessing
         self.images += len(images)

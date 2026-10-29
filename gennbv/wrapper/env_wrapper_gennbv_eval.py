@@ -117,7 +117,7 @@ class EnvWrapperGenNBVEval(gym.Env):
             # Snapshot is captured before reset_idx, matching the returned observation.
             lines = self.line_detector(
                 self._gym_env.line_rgb, getattr(self._gym_env, 'line_depth', None),
-                getattr(self._gym_env, 'line_intrinsics', None))
+                getattr(self._gym_env, 'line_intrinsics', None), self._gym_env.line_foreground)
             self.last_line_tokens = lines
             flat = torch.cat([flat, lines.reshape(flat.shape[0], -1).to(flat.device)], dim=-1)
         return flat

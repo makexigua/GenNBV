@@ -71,7 +71,8 @@ def main():
         with Image.open(args.image) as image:
             rgb = torch.from_numpy(np.array(image.convert('RGB')))[None].to(args.device)
         detector = HAWPState(args.hawp_config, args.hawp_weights, args.device)
-        tokens = detector(rgb)
+        # Standalone image has no simulator target mask: verify HAWP itself.
+        tokens = detector(rgb, foreground=torch.ones(rgb.shape[:3], dtype=torch.bool, device=rgb.device))
         assert tokens.shape == (1, 64, 6) and torch.isfinite(tokens).all()
         assert not any(p.requires_grad for p in detector.model.parameters())
         count = int(tokens[..., 5].sum().item())

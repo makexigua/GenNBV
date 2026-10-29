@@ -537,6 +537,8 @@ class Env_Train_Base(DroneVisualInputEnv):
         self.depth_processed = depth_images # [num_env, H, W]
 
         seg_images = torch.stack(self.seg_cam_tensors)
+        if getattr(self, 'capture_line_seg', False):
+            self.line_foreground = (seg_images == self.OBJECT_SEGMENTATION_ID).clone()
         seg_images = torch.nan_to_num(seg_images, neginf=0)
         if not self.cfg.visual_input.normalization:
             seg_images = seg_images * 255

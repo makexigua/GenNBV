@@ -5,6 +5,23 @@ from chapter3.perception.hawp import pack_lines
 
 
 class TokenTests(unittest.TestCase):
+    def test_background_rejected_but_silhouette_kept(self):
+        mask = np.zeros((100, 100), dtype=bool)
+        mask[25:75, 25:75] = True
+        lines = [[0, 5, 99, 5], [25, 25, 75, 25], [50, 25, 50, 75],
+                 [0, 80, 99, 80]]
+        tokens = pack_lines(lines, [.99, .9, .8, .7], 100, 100,
+                            max_lines=4, foreground=mask)
+        self.assertEqual(int(tokens[:, 5].sum()), 2)
+        np.testing.assert_allclose(tokens[:2, 4], [.9, .8])
+
+    def test_empty_foreground_and_shape_mismatch(self):
+        tokens = pack_lines([[0, 50, 99, 50]], [.9], 100, 100,
+                            foreground=np.zeros((100, 100), dtype=bool))
+        self.assertEqual(int(tokens[:, 5].sum()), 0)
+        with self.assertRaises(ValueError):
+            pack_lines([], [], 100, 100, foreground=np.zeros((99, 100)))
+
     def test_empty(self):
         np.testing.assert_array_equal(pack_lines([], [], 100, 50), np.zeros((64, 6)))
 
