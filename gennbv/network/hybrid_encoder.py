@@ -17,6 +17,9 @@ class Hybrid_Encoder(BaseFeaturesExtractor):
         visual_input_shape=None,
         state_input_shape=None,
         use_image=False,
+        use_line=False,
+        line_max_lines=64,
+        line_mode='raw',
     ):
         assert encoder_param is not None, "Need parameters !"
         assert net_param is not None, "Need parameters !"
@@ -26,6 +29,12 @@ class Hybrid_Encoder(BaseFeaturesExtractor):
         self.image_shape = visual_input_shape[1:]
         self.state_input_shape = state_input_shape
         self.use_image = use_image
+        self.use_line = use_line
+        self.line_max_lines = line_max_lines
+        from chapter3.perception.hawp import line_fields
+        self.line_fields = line_fields(line_mode)
+        if use_line and (not use_image or line_max_lines < 1):
+            raise ValueError('Line branch requires the three-channel image baseline and positive max lines')
         feature_dim = net_param["append_hidden_shapes"][-1]
         net_param["append_hidden_shapes"].pop()
         super(Hybrid_Encoder, self).__init__(observation_space, feature_dim)
@@ -51,7 +60,7 @@ class Hybrid_Encoder(BaseFeaturesExtractor):
         )
 
         self.output_layer = nn.Sequential(
-            nn.Linear(in_features=768 if use_image else 512, out_features=256, bias=True),
+            nn.Linear(in_features=(768 if use_image else 512) + (128 if use_line else 0), out_features=256, bias=True),
             nn.ReLU(inplace=True),
         )
         if use_image:
@@ -68,6 +77,19 @@ class Hybrid_Encoder(BaseFeaturesExtractor):
                 nn.Linear(32 * 7 * 7, 256),
                 nn.ReLU(inplace=True),
             )
+
+        if use_line:
+            self.line_encoder = nn.Sequential(nn.Linear(self.line_fields - 1, 64), nn.ReLU(),
+                                              nn.Linear(64, 128), nn.ReLU())
+
+    def encode_lines(self, tokens):
+        mask = tokens[..., 5:6] > 0.5
+        # Keep the padding mask separate from geometric evidence (last three fields).
+        values = torch.cat([tokens[..., :5], tokens[..., 6:]], dim=-1)
+        inputs = torch.where(mask, values, torch.zeros_like(values))
+        encoded = self.line_encoder(inputs)
+        encoded = torch.where(mask, encoded, torch.zeros_like(encoded))
+        return encoded.sum(dim=1) / mask.sum(dim=1).clamp(min=1)
 
     def positional_encoding(self, positions, freqs=2):
         """
@@ -106,12 +128,16 @@ class Hybrid_Encoder(BaseFeaturesExtractor):
         if self.use_image:
             image_start = self.state_input_shape[0] + 8000
             image_size = self.image_channel * self.image_shape[0] * self.image_shape[1]
-            if observations.shape[1] != image_start + image_size:
+            if observations.shape[1] != image_start + image_size + (self.line_max_lines * self.line_fields if self.use_line else 0):
                 raise ValueError("Flattened observation size does not match pose, grid and image inputs")
-            image_input = observations[:, image_start:].reshape(
+            image_input = observations[:, image_start:image_start + image_size].reshape(
                 num_env, self.image_channel, *self.image_shape
             ).float() / 255.0
             features.append(self.naive_encoder_image(image_input))
+
+        if self.use_line:
+            tokens = observations[:, image_start + image_size:].reshape(num_env, self.line_max_lines, self.line_fields)
+            features.append(self.encode_lines(tokens))
 
         feature_hybrid = self.output_layer(torch.cat(features, dim=-1))
 

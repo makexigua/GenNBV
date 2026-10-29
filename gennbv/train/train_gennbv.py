@@ -1,4 +1,6 @@
 import os
+import json
+from pathlib import Path
 from isaacgym import gymapi
 import gennbv
 from gennbv.callback import ReconstructionCallBack
@@ -118,7 +120,12 @@ def main():
         },
     ]
 
-    args = get_args(additional_args+reward_args)
+    from chapter3.perception.hawp import training_arguments, HAWPState
+    args = get_args(additional_args + reward_args + training_arguments())
+    if args.line_mode != 'raw' and not args.use_line:
+        raise ValueError('--line_mode requires --use_line 1')
+    if args.use_line and not args.use_image:
+        raise ValueError('--use_line requires --use_image 1')
     args.task = "train_gennbv"
     if args.num_envs is None:
         args.num_envs = 256
@@ -149,7 +156,14 @@ def main():
     # NOTE: train env
     env_train, env_cfg_train = task_registry.make_env(name=args.task, args=args, env_cfg=env_cfg)
     env_cfg_dict = {key:value for key, value in env_cfg_train.__dict__.items()}
-    env = EnvWrapperGenNBVTrain(env_train)
+    line_detector = HAWPState(args.hawp_config, args.hawp_weights, args.sim_device,
+                              args.line_max_lines, args.line_threshold,
+                              geometry_mode=args.line_mode) if args.use_line else None
+    env = EnvWrapperGenNBVTrain(env_train, line_detector=line_detector)
+    Path(log_dir).mkdir(parents=True, exist_ok=True)
+    manifest = dict(vars(args))
+    manifest['line_detector'] = line_detector.manifest if line_detector else None
+    (Path(log_dir) / 'training_manifest.json').write_text(json.dumps(manifest, indent=2, default=str))
 
     # ===== Setup the config =====
     config = dict(
@@ -170,6 +184,8 @@ def main():
                     state_input_shape=(args.buffer_size * 6,),  # buffer_size * pose_size
                     visual_input_shape=(env_train.k, env_train.rgb_h, env_train.rgb_w),
                     use_image=bool(args.use_image),
+                    use_line=bool(args.use_line), line_max_lines=args.line_max_lines,
+                    line_mode=args.line_mode,
                 )
             ),
             env=env,
@@ -247,6 +263,8 @@ def main():
         model.save(final_path)
         print(f"Saved final trained model to {final_path}.zip", flush=True)
     finally:
+        if line_detector:
+            (Path(log_dir) / 'hawp_timing.json').write_text(json.dumps(line_detector.stats(), indent=2))
         env.close()
 
 

@@ -515,11 +515,20 @@ class Env_Train_Base(DroneVisualInputEnv):
         First, post process the raw image and then stack along the time axis
         """
         rgb_images = torch.stack(self.rgb_cam_tensors)[..., :3].permute(0, 3, 1, 2) # [num_env, 3, H, W]
+        if getattr(self, 'capture_line_rgb', False):
+            # Own the snapshot before releasing Isaac Gym camera tensor access.
+            self.line_rgb = rgb_images.permute(0, 2, 3, 1).contiguous().clone()
         rgb_images = torch.nn.functional.interpolate(rgb_images, size=(self.rgb_h, self.rgb_w))
         self.rgb_grayscale = rgb_to_grayscale(rgb_images).to(torch.float32)   # [num_env, 1, H, W], weighted sum of RGB
         assert self.rgb_h == rgb_images.shape[2], self.rgb_w == rgb_images.shape[3]
 
         depth_images = torch.stack(self.depth_cam_tensors)
+        if getattr(self, 'capture_line_depth', False):
+            # Use unclipped, unscaled sensor depth; invalid/far samples stay unknown.
+            z = -depth_images
+            valid = torch.isfinite(z) & (z > self.cfg.visual_input.near_plane)
+            valid &= z < min(abs(self.DEPTH_SENSE_DIST), self.cfg.visual_input.far_plane)
+            self.line_depth = torch.where(valid, z, torch.full_like(z, float('nan'))).clone()
         depth_images = torch.nan_to_num(depth_images, neginf=0)
         depth_images = torch.clamp(depth_images, min=self.DEPTH_SENSE_DIST)     # depth min: -8
         depth_images = abs(depth_images)    # depth range: [0.0, 8.0]

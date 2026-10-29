@@ -85,12 +85,21 @@ def flatten_observation_spaces(observation_spaces, key_sequence):
 
 class EnvWrapperGenNBVEval(gym.Env):
     """An env wrapper that flattens the observation dictionary to an array."""
-    def __init__(self, gym_env, observation_excluded=()):
+    def __init__(self, gym_env, observation_excluded=(), line_detector=None):
         """Initializes the wrapper."""
         self.observation_excluded = observation_excluded
         self._gym_env = gym_env
+        self.line_detector = line_detector
+        from chapter3.perception.hawp import configure_line_camera
+        configure_line_camera(self._gym_env, line_detector)
         self.observation_space = self._flatten_observation_spaces(self._gym_env.observation_space)
         self.action_space = self._gym_env.action_space
+        if line_detector is not None:
+            size = line_detector.max_lines * line_detector.fields
+            self.observation_space = spaces.Box(
+                low=np.concatenate([self.observation_space.low, np.zeros(size)]).astype(np.float32),
+                high=np.concatenate([self.observation_space.high, np.ones(size)]).astype(np.float32),
+                dtype=np.float32)
 
     def __getattr__(self, attr):
         return getattr(self._gym_env, attr)
@@ -103,7 +112,15 @@ class EnvWrapperGenNBVEval(gym.Env):
 
     def _flatten_observation(self, input_observation):
         """Flatten the dictionary to an array."""
-        return flatten_observations(observation_dict=input_observation, key_sequence=["state", "grid", "state_rgb"])
+        flat = flatten_observations(observation_dict=input_observation, key_sequence=["state", "grid", "state_rgb"])
+        if self.line_detector is not None:
+            # Snapshot is captured before reset_idx, matching the returned observation.
+            lines = self.line_detector(
+                self._gym_env.line_rgb, getattr(self._gym_env, 'line_depth', None),
+                getattr(self._gym_env, 'line_intrinsics', None))
+            self.last_line_tokens = lines
+            flat = torch.cat([flat, lines.reshape(flat.shape[0], -1).to(flat.device)], dim=-1)
+        return flat
 
     def reset(self):
         # observation = self._gym_env.reset() # reset() in subproc_vec_env (def reset(self) -> VecEnvObs:)

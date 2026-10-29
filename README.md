@@ -1,3 +1,5 @@
+> **本工作区第三章代码入口：** [目录与命令](docs/chapter3/README.md) · [HAWP安装](docs/chapter3/HAWP_SETUP.md) · [对照实验](docs/chapter3/EXPERIMENTS.md)。新增代码统一在 `chapter3/`，下方保留原项目说明。
+
 <br>
 <p align="center">
 <h1 align="center"><strong>GenNBV: Generalizable Next-Best-View Policy for Active 3D Reconstruction</strong></h1>
