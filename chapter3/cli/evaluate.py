@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import time
 from types import SimpleNamespace
 from zipfile import ZipFile
 
@@ -36,6 +37,8 @@ def parse_args():
     p.add_argument('--line-threshold', type=float, default=0.5)
     p.add_argument('--line-mode', choices=['raw', 'evidence', 'unknown'], default='raw')
     p.add_argument('--stochastic', action='store_true')
+    p.add_argument('--profile-latency', action='store_true',
+                   help='Time synchronized policy+environment steps; exclude reset, first forced view and output files')
     p.add_argument('--detect-lines', action='store_true',
                    help='Save 2D DeepLSD overlays; does not change policy observations')
     p.add_argument('--line-weights', help='Official DeepLSD checkpoint for --detect-lines')
@@ -212,6 +215,7 @@ def main():
     raw = None
     completed = False
     records = []
+    latency_rows = []
     finished = np.zeros(args.num_envs, dtype=bool)
     try:
         raw = RecordedEval(cfg, sim_params, gymapi.SIM_PHYSX, str(device), True)
@@ -232,9 +236,22 @@ def main():
                 # Upstream reset() returns a reset sentinel done=1 and clears buffers.
                 # Like its evaluation loop, discard reset rewards/dones and count steps.
                 # The first step is forced to the configured initial pose by upstream.
+                if args.profile_latency:
+                    torch.cuda.synchronize(device)
+                    started = time.perf_counter()
                 with torch.no_grad():
                     actions, _ = policy.predict(obs, deterministic=not args.stochastic)
+                if args.profile_latency:
+                    torch.cuda.synchronize(device)
+                    policy_end = time.perf_counter()
                 obs, rewards, dones, infos, accuracies = wrapped.step(actions)
+                if args.profile_latency:
+                    torch.cuda.synchronize(device)
+                    step_end = time.perf_counter()
+                    latency_rows.append(dict(view=view, active_scenes=int((~finished).sum()),
+                                             policy_ms=1000 * (policy_end - started),
+                                             environment_ms=1000 * (step_end - policy_end),
+                                             total_ms=1000 * (step_end - started)))
                 if args.inspect_observation:
                     image_flat = obs[:, 600 + 8000:600 + 8000 + 2 * 64 * 64]
                     if image_flat.shape[1] != 2 * 64 * 64:
@@ -301,6 +318,22 @@ def main():
                     'No paper AUC or centimetre accuracy claim. Depth is upstream-processed, not raw.',
         }
         summary['hawp_timing'] = hawp_detector.stats() if hawp_detector else None
+        if args.profile_latency:
+            with (out / 'latency_steps.csv').open('w', newline='') as stream:
+                writer = csv.DictWriter(stream, fieldnames=['view', 'active_scenes', 'policy_ms',
+                                                             'environment_ms', 'total_ms'])
+                writer.writeheader()
+                writer.writerows(latency_rows)
+            measured = [row for row in latency_rows if row['view'] > 1]
+            latency = dict(sample_count=len(measured), excluded='reset and first forced initial view',
+                           batch_size=args.num_envs, hardware='current server GPU, not UAV onboard computer',
+                           scope='policy.predict + wrapped.step, includes simulation, sensor/map update, HAWP, geometry and transfers; excludes image/CSV writing and travel')
+            if measured:
+                for key in ('policy_ms', 'environment_ms', 'total_ms'):
+                    values = np.array([row[key] for row in measured])
+                    latency[key] = dict(median=float(np.median(values)), p95=float(np.percentile(values, 95)))
+            (out / 'latency_summary.json').write_text(json.dumps(latency, indent=2))
+            print('Latency summary:', json.dumps(latency), flush=True)
         (out / 'summary.json').write_text(json.dumps(summary, indent=2))
         import matplotlib
         matplotlib.use('Agg')

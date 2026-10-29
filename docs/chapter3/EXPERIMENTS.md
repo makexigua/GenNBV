@@ -79,6 +79,8 @@ python -u -m chapter3 ablate \
 
 ## 第三步：预实验，不等同充分训练
 
+单机延迟诊断可对已保存的 baseline 与 evidence 模型分别执行 `python -m chapter3 eval ... --profile-latency`。输出 `latency_steps.csv`、`latency_summary.json`；统计同步后的 `policy.predict + wrapped.step`，含仿真渲染、相机、栅格、HAWP、几何、策略，排除 reset、首个固定初始视点及结果写盘。报告批量环境数，中位数与P95；这是服务器仿真评估耗时，不等同于真实机载决策或飞行时间。
+
 短测与可视化确认后，先按 `HAWP_SETUP.md` 容量检查方式，加 `--line_mode evidence` 做256环境短测。通过后在 tmux 中运行（重新进入会话要恢复上面的环境）。
 
 ```bash
