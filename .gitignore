@@ -116,3 +116,5 @@ log
 
 data_gennbv/*
 wandb
+# Chapter 3 parallel experiment launcher
+!scripts/run_ch3_parallel.sh
