@@ -553,4 +553,8 @@ class Env_Train_GenNBV(Env_Train_Base):
 
     def _reward_termination(self):
         """ Terminal reward / penalty """
-        return self.reset_buf * ~self.time_out_buf  # terminate before reaching max_episode_length
+        penalty = getattr(self.cfg, "collision_penalty", None)
+        if penalty is not None:
+            from chapter3.paper_reward import collision_terminal_reward
+            return collision_terminal_reward(self.collision_buf, penalty)
+        return self.reset_buf * ~self.time_out_buf  # legacy checkpoint protocol

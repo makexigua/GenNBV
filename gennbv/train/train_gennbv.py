@@ -19,6 +19,8 @@ from gennbv.network.hybrid_encoder import Hybrid_Encoder
 
 def main():
     additional_args = [
+        {"name": "--collision_penalty", "type": float, "default": None,
+         "help": "Opt-in collision penalty before dt scaling; paper does not specify magnitude. Disables positive terminal bonus."},
         {
             "name": "--use_image",
             "type": int,
@@ -150,6 +152,12 @@ def main():
     # ===== Setup the training environment =====
     env_cfg, _ = task_registry.get_cfgs(name=args.task)
 
+    if args.collision_penalty is not None:
+        if args.collision_penalty <= 0:
+            raise ValueError("collision_penalty must be positive")
+        env_cfg.collision_penalty = args.collision_penalty
+        env_cfg.rewards.scales.termination = 1.0
+
     env_cfg.max_episode_length = args.max_episode_length
     env_cfg.visual_input.stack = args.buffer_size
 
@@ -162,6 +170,11 @@ def main():
     env = EnvWrapperGenNBVTrain(env_train, line_detector=line_detector)
     Path(log_dir).mkdir(parents=True, exist_ok=True)
     manifest = dict(vars(args))
+    manifest['effective_reward_scales'] = dict(env_train.reward_scales)
+    manifest['effective_only_positive_rewards'] = env_cfg_train.rewards.only_positive_rewards
+    manifest['planned_interaction_steps'] = args.num_envs * args.n_steps * args.total_iters
+    manifest['action_space'] = str(env.action_space)
+    manifest['alignment_status'] = 'public-code derivative; not exact paper reproduction'
     manifest['line_detector'] = line_detector.manifest if line_detector else None
     (Path(log_dir) / 'training_manifest.json').write_text(json.dumps(manifest, indent=2, default=str))
 
