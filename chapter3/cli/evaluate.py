@@ -20,6 +20,10 @@ from zipfile import ZipFile
 def parse_args():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--weights', required=True)
+    p.add_argument('--continuous-actions', action='store_true')
+    p.add_argument('--grid-channels', type=int, choices=[1,4], default=1)
+    p.add_argument('--image-conv-layers', type=int, choices=[2, 3], default=3)
+    p.add_argument('--policy-hidden-layers', type=int, choices=[0, 2], default=0)
     p.add_argument('--device', type=int, default=0, help='CUDA device index')
     p.add_argument('--graphics-device', type=int, required=True,
                    help='Vulkan device index of the same physical GPU')
@@ -97,17 +101,17 @@ def main():
     # Mirror the architecture in train_eval_gennbv.py, without PPO rollout buffers.
     # Its encoder mutates append_hidden_shapes via pop(), so reconstruct fresh kwargs.
     from chapter3.perception.hawp import line_fields
-    obs_space = Box(-np.inf, np.inf, shape=(600 + 8000 + 2 * 64 * 64 + (args.line_max_lines * line_fields(args.line_mode) if args.use_line else 0),), dtype=np.float32)
-    action_space = MultiDiscrete([81, 81, 51, 1, 13, 13])
+    obs_space = Box(-np.inf, np.inf, shape=(600 + 8000 * args.grid_channels + 2 * 64 * 64 + (args.line_max_lines * line_fields(args.line_mode) if args.use_line else 0),), dtype=np.float32)
+    action_space = Box(-1., 1., shape=(5,), dtype=np.float32) if args.continuous_actions else MultiDiscrete([81, 81, 51, 1, 13, 13])
     policy = ActorCriticPolicy_Train_Eval(
         obs_space, action_space, lr_schedule=lambda _: 0.0,
-        net_arch=[], ortho_init=False, features_extractor_class=Hybrid_Encoder,
+        net_arch=([dict(pi=[256, 256], vf=[256, 256])] if args.policy_hidden_layers == 2 else []), ortho_init=False, features_extractor_class=Hybrid_Encoder,
         features_extractor_kwargs=dict(
             encoder_param={'hidden_shapes': [256, 256], 'visual_dim': 256},
             net_param={'transformer_params': [[1, 256], [1, 256]],
                        'append_hidden_shapes': [256]},
             state_input_shape=(600,), visual_input_shape=(2, 64, 64),
-            use_image=args.use_image,
+            use_image=args.use_image, image_conv_layers=args.image_conv_layers, grid_channels=args.grid_channels,
             use_line=args.use_line, line_max_lines=args.line_max_lines,
             line_mode=args.line_mode,
         ),
@@ -194,6 +198,8 @@ def main():
             return reward
 
     cfg = Config_GenNBV_Eval()
+    cfg.continuous_actions = args.continuous_actions
+    cfg.grid_channels = args.grid_channels
     cfg.env.num_envs = args.num_envs
     cfg.max_episode_length = args.views
     cfg.visual_input.stack = 100  # Must match the checkpoint, independent of view budget.
@@ -225,7 +231,7 @@ def main():
         (out / 'metadata.json').write_text(json.dumps(meta, indent=2))
         if wrapped.observation_space.shape != obs_space.shape:
             raise RuntimeError('Observation shape differs from checkpoint architecture')
-        if not np.array_equal(wrapped.action_space.nvec, action_space.nvec):
+        if wrapped.action_space != action_space:
             raise RuntimeError('Action space differs from checkpoint architecture')
         obs, rewards, dones, infos, accuracies = wrapped.reset()
         with (out / 'trace.csv').open('w', newline='') as f:
@@ -253,7 +259,7 @@ def main():
                                              environment_ms=1000 * (step_end - policy_end),
                                              total_ms=1000 * (step_end - started)))
                 if args.inspect_observation:
-                    image_flat = obs[:, 600 + 8000:600 + 8000 + 2 * 64 * 64]
+                    image_flat = obs[:, 600 + 8000 * args.grid_channels:600 + 8000 * args.grid_channels + 2 * 64 * 64]
                     if image_flat.shape[1] != 2 * 64 * 64:
                         raise RuntimeError(f'Unexpected image observation shape: {tuple(image_flat.shape)}')
                     image_pair = image_flat.reshape(args.num_envs, 2, 64, 64)

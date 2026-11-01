@@ -19,6 +19,7 @@ from __future__ import division
 from __future__ import print_function
 import gym
 import collections
+from chapter3.paper_inputs import transform_action
 
 import torch
 from gym import spaces
@@ -94,6 +95,8 @@ class EnvWrapperGenNBVEval(gym.Env):
         configure_line_camera(self._gym_env, line_detector)
         self.observation_space = self._flatten_observation_spaces(self._gym_env.observation_space)
         self.action_space = self._gym_env.action_space
+        from chapter3.paper_inputs import configure
+        configure(self)
         if line_detector is not None:
             size = line_detector.max_lines * line_detector.fields
             self.observation_space = spaces.Box(
@@ -112,6 +115,8 @@ class EnvWrapperGenNBVEval(gym.Env):
 
     def _flatten_observation(self, input_observation):
         """Flatten the dictionary to an array."""
+        from chapter3.paper_inputs import transform_observation
+        input_observation = transform_observation(self, input_observation)
         flat = flatten_observations(observation_dict=input_observation, key_sequence=["state", "grid", "state_rgb"])
         if self.line_detector is not None:
             # Snapshot is captured before reset_idx, matching the returned observation.
@@ -139,8 +144,8 @@ class EnvWrapperGenNBVEval(gym.Env):
           The tuple containing the flattened observation, the reward, the epsiode
             end indicator.
         """
-        # observation_dict, reward, done, _ = self._gym_env.step(action)
-        observation_dict, reward, done, _, accs = self._gym_env.step(action)
+        # observation_dict, reward, done, _ = self._gym_env.step(transform_action(self, action))
+        observation_dict, reward, done, _, accs = self._gym_env.step(transform_action(self, action))
         # return self._flatten_observation(observation_dict), reward, done, _
         return self._flatten_observation(observation_dict), reward, done, _, accs
 

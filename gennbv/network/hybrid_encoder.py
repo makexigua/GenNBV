@@ -20,6 +20,8 @@ class Hybrid_Encoder(BaseFeaturesExtractor):
         use_line=False,
         line_max_lines=64,
         line_mode='raw',
+        image_conv_layers=3,
+        grid_channels=1,
     ):
         assert encoder_param is not None, "Need parameters !"
         assert net_param is not None, "Need parameters !"
@@ -28,6 +30,11 @@ class Hybrid_Encoder(BaseFeaturesExtractor):
         self.image_channel = visual_input_shape[0]  # buffer_size
         self.image_shape = visual_input_shape[1:]
         self.state_input_shape = state_input_shape
+        if image_conv_layers not in (2, 3):
+            raise ValueError("image_conv_layers must be 2 or 3")
+        if grid_channels not in (1, 4):
+            raise ValueError("grid_channels must be 1 or 4")
+        self.grid_channels = grid_channels
         self.use_image = use_image
         self.use_line = use_line
         self.line_max_lines = line_max_lines
@@ -40,7 +47,7 @@ class Hybrid_Encoder(BaseFeaturesExtractor):
         super(Hybrid_Encoder, self).__init__(observation_space, feature_dim)
 
         self.naive_encoder_grid = nn.Sequential(
-            nn.Conv3d(in_channels=1, out_channels=16, kernel_size=3, stride=2, padding=0),
+            nn.Conv3d(in_channels=grid_channels, out_channels=16, kernel_size=3, stride=2, padding=0),
             nn.BatchNorm3d(16),
             nn.ReLU(inplace=True),
             nn.Conv3d(in_channels=16, out_channels=16, kernel_size=3, stride=2, padding=0),
@@ -66,17 +73,18 @@ class Hybrid_Encoder(BaseFeaturesExtractor):
         if use_image:
             if tuple(visual_input_shape) != (2, 64, 64):
                 raise ValueError("The image branch expects two 64x64 grayscale frames")
-            self.naive_encoder_image = nn.Sequential(
+            image_layers = [
                 nn.Conv2d(2, 16, kernel_size=3, stride=2),
                 nn.ReLU(inplace=True),
                 nn.Conv2d(16, 32, kernel_size=3, stride=2),
                 nn.ReLU(inplace=True),
-                nn.Conv2d(32, 32, kernel_size=3, stride=2),
-                nn.ReLU(inplace=True),
-                nn.Flatten(),
-                nn.Linear(32 * 7 * 7, 256),
-                nn.ReLU(inplace=True),
-            )
+            ]
+            spatial = 15
+            if image_conv_layers == 3:
+                image_layers += [nn.Conv2d(32, 32, kernel_size=3, stride=2), nn.ReLU(inplace=True)]
+                spatial = 7
+            image_layers += [nn.Flatten(), nn.Linear(32 * spatial * spatial, 256), nn.ReLU(inplace=True)]
+            self.naive_encoder_image = nn.Sequential(*image_layers)
 
         if use_line:
             self.line_encoder = nn.Sequential(nn.Linear(self.line_fields - 1, 64), nn.ReLU(),
@@ -118,15 +126,15 @@ class Hybrid_Encoder(BaseFeaturesExtractor):
         feature_action = self.naive_encoder_action(action_input)    # [num_env, 256]
 
         # grid
-        grid_input = observations[:, self.state_input_shape[0]:self.state_input_shape[0]+8000]     # [num_env, 1*X*Y*Z]
-        grid_input = grid_input.reshape(num_env, 1, 20, 20, 20)
+        grid_input = observations[:, self.state_input_shape[0]:self.state_input_shape[0]+8000*self.grid_channels]     # [num_env, 1*X*Y*Z]
+        grid_input = grid_input.reshape(num_env, self.grid_channels, 20, 20, 20)
 
         feature_grid = self.naive_encoder_grid(grid_input).reshape(num_env, -1) # [num_env, hidden_layer_size]
         feature_grid = self.output_layer_grid(feature_grid)  # [num_env, 256]
 
         features = [feature_action, feature_grid]
         if self.use_image:
-            image_start = self.state_input_shape[0] + 8000
+            image_start = self.state_input_shape[0] + 8000*self.grid_channels
             image_size = self.image_channel * self.image_shape[0] * self.image_shape[1]
             if observations.shape[1] != image_start + image_size + (self.line_max_lines * self.line_fields if self.use_line else 0):
                 raise ValueError("Flattened observation size does not match pose, grid and image inputs")

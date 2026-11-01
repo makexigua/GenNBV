@@ -19,6 +19,10 @@ from gennbv.network.hybrid_encoder import Hybrid_Encoder
 
 def main():
     additional_args = [
+        {"name": "--continuous_actions", "action": "store_true", "default": False},
+        {"name": "--grid_channels", "type": int, "default": 1, "choices": [1, 4]},
+        {"name": "--image_conv_layers", "type": int, "default": 3, "choices": [2, 3]},
+        {"name": "--policy_hidden_layers", "type": int, "default": 0, "choices": [0, 2]},
         {"name": "--collision_penalty", "type": float, "default": None,
          "help": "Opt-in collision penalty before dt scaling; paper does not specify magnitude. Disables positive terminal bonus."},
         {
@@ -158,6 +162,10 @@ def main():
         env_cfg.collision_penalty = args.collision_penalty
         env_cfg.rewards.scales.termination = 1.0
 
+    env_cfg.continuous_actions = args.continuous_actions
+    env_cfg.grid_channels = args.grid_channels
+    if args.buffer_size != 100 and args.grid_channels == 4:
+        raise ValueError("Four-channel adapter requires buffer_size=100")
     env_cfg.max_episode_length = args.max_episode_length
     env_cfg.visual_input.stack = args.buffer_size
 
@@ -183,7 +191,7 @@ def main():
         algo=dict(
             policy=ActorCriticPolicy_Train_Eval,
             policy_kwargs=dict(
-                net_arch=[],
+                net_arch=([dict(pi=[256, 256], vf=[256, 256])] if args.policy_hidden_layers == 2 else []),
                 features_extractor_class=Hybrid_Encoder,
                 features_extractor_kwargs=dict(
                     encoder_param={
@@ -197,6 +205,7 @@ def main():
                     state_input_shape=(args.buffer_size * 6,),  # buffer_size * pose_size
                     visual_input_shape=(env_train.k, env_train.rgb_h, env_train.rgb_w),
                     use_image=bool(args.use_image),
+                    image_conv_layers=args.image_conv_layers, grid_channels=args.grid_channels,
                     use_line=bool(args.use_line), line_max_lines=args.line_max_lines,
                     line_mode=args.line_mode,
                 )

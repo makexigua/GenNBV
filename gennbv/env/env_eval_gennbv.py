@@ -85,6 +85,9 @@ class Env_Eval_GenNBV(Env_Train_GenNBV):
             self.env_to_scene.append(env_idx % self.num_scene)
         self.env_to_scene = torch.tensor(self.env_to_scene, device=self.device)     # [num_env]
 
+        if getattr(self.cfg, 'grid_channels', 1) == 4:
+            self.grid_world_coordinates = grid_gt[self.env_to_scene, ..., :3].clone()
+
         self.grid_gt = grid_gt[..., 3] # [num_scene, X, Y, Z, 4] -> [num_scene, X, Y, Z]
         self.grid_gt = self.grid_gt[self.env_to_scene]
         self.voxel_size_gt = self.voxel_size_gt[self.env_to_scene]
